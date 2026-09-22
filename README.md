@@ -18,7 +18,7 @@ storage) is a clearly marked stub you swap in.
   amount — it sends a `toolKey` and the server looks up the price itself,
   from the `GenerationCost` table (admin-editable, not hard-coded).
 - **Multi-provider AI abstraction** (`src/lib/ai/`) — `providerRegistry.ts`
-  picks the highest-priority *enabled* provider from the database, retries,
+  picks the highest-priority _enabled_ provider from the database, retries,
   and falls back to the next one on failure. Two template adapters
   (`mockImageProvider.ts`, `mockVideoProvider.ts`) show the exact shape a
   real adapter takes — swap the body of `generate()` for a real API call
