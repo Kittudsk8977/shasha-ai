@@ -1,0 +1,1 @@
+  import 'dotenv/config'; import { mockImageProvider } from '../src/lib/ai/providers/mockImageProvider'; async function main() { const result = await mockImageProvider.generate({ toolKey: 'image.generate', userId: 'test-user', input: { prompt: 'a cute cartoon robot watering a small plant, warm lighting' } }); console.log(JSON.stringify(result, null, 2)); } main();

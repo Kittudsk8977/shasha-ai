@@ -1,0 +1,363 @@
+// SHASHA-AI data model
+// Run `npx prisma migrate dev` after filling in DATABASE_URL in .env
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- AUTH & USERS ----------
+
+model User {
+  id                String   @id @default(cuid())
+  name              String?
+  email             String   @unique
+  emailVerifiedAt   DateTime?
+  passwordHash      String?           // null if user only ever used Google OAuth
+  googleId          String?  @unique
+  role              UserRole @default(CREATOR)
+  status            UserStatus @default(ACTIVE)
+  avatarUrl         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  creditBalance     Int      @default(0)
+  referralCode      String   @unique
+  referredById      String?
+  referredBy        User?    @relation("Referrals", fields: [referredById], references: [id])
+  referrals         User[]   @relation("Referrals")
+
+  subscription      Subscription?
+  projects          Project[]
+  generationJobs    GenerationJob[]
+  creditTxns        CreditTransaction[]
+  apiKeys           ApiKey[]
+  mediaAssets       MediaAsset[]
+  brandKit          BrandKit?
+  sessions          Session[]
+  abuseFlags        AbuseFlag[]
+
+  @@index([email])
+}
+
+enum UserRole {
+  CREATOR
+  ADMIN
+  SUPPORT
+  AFFILIATE
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+  DELETED
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionToken  String   @unique
+  device        String?
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+}
+
+// ---------- PLANS, SUBSCRIPTIONS & BILLING ----------
+// Prices/credits are DB rows, never hard-coded in application code,
+// so admins can change them without a deploy.
+
+model Plan {
+  id              String   @id @default(cuid())
+  key             String   @unique   // "free" | "starter" | "pro" | "business"
+  name            String
+  priceMinorUnits Int                // store money as integer minor units (paise/cents)
+  currency        String   @default("INR")
+  billingPeriod   BillingPeriod @default(MONTHLY)
+  monthlyCredits  Int
+  maxResolution   String?            // e.g. "1080p", "4k"
+  allowsWatermarkFree Boolean @default(false)
+  allowsApiAccess Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  subscriptions   Subscription[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+enum BillingPeriod {
+  MONTHLY
+  YEARLY
+}
+
+model Subscription {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id])
+  planId             String
+  plan               Plan     @relation(fields: [planId], references: [id])
+  status             SubscriptionStatus @default(TRIALING)
+  provider           PaymentProvider
+  providerCustomerId String?
+  providerSubId      String?
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime @default(now())
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  invoices           Invoice[]
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentProvider {
+  RAZORPAY
+  STRIPE
+}
+
+model Invoice {
+  id              String   @id @default(cuid())
+  subscriptionId  String
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id])
+  amountMinorUnits Int
+  currency        String
+  status          InvoiceStatus
+  providerInvoiceId String?
+  issuedAt        DateTime @default(now())
+}
+
+enum InvoiceStatus {
+  PAID
+  FAILED
+  REFUNDED
+  PENDING
+}
+
+model Coupon {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  type           CouponType
+  value          Int                 // percentage (0-100) or fixed minor units, per `type`
+  bonusCredits   Int      @default(0)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  maxRedemptions Int?
+  perUserLimit   Int      @default(1)
+  restrictedToPlanId String?
+  isActive       Boolean  @default(true)
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+  CREDIT_BONUS
+  TRIAL_EXTENSION
+}
+
+// ---------- CREDITS ----------
+// GenerationCost is the admin-configurable pricing table referenced
+// in the spec — application code must always read cost from here,
+// never hard-code it.
+
+model GenerationCost {
+  id          String   @id @default(cuid())
+  toolKey     String   @unique   // "image.generate", "video.generate.10s", "voice.tts", "music.song", ...
+  label       String
+  creditCost  Int
+  isActive    Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+}
+
+model CreditTransaction {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  amount      Int                 // positive = credit added, negative = credit spent
+  reason      CreditReason
+  jobId       String?
+  job         GenerationJob? @relation(fields: [jobId], references: [id])
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+enum CreditReason {
+  SIGNUP_BONUS
+  PURCHASE
+  SUBSCRIPTION_RENEWAL
+  GENERATION_SPEND
+  GENERATION_REFUND
+  REFERRAL_BONUS
+  COUPON_BONUS
+  ADMIN_ADJUSTMENT
+}
+
+model CreditPackage {
+  id              String @id @default(cuid())
+  name            String
+  credits         Int
+  priceMinorUnits Int
+  currency        String @default("INR")
+  isActive        Boolean @default(true)
+}
+
+// ---------- AI PROVIDERS (multi-provider abstraction) ----------
+
+model AiProvider {
+  id            String   @id @default(cuid())
+  key           String   @unique   // "openai", "stability", "elevenlabs", "runway", ...
+  displayName   String
+  category      AiCategory
+  isEnabled     Boolean  @default(false)
+  priority      Int      @default(100)   // lower = tried first
+  timeoutMs     Int      @default(60000)
+  maxRetries    Int      @default(2)
+  costPerUnit   Float?              // provider's own cost, for margin tracking (not user-facing)
+  status        ProviderHealth @default(OFFLINE)
+  // The actual secret lives in an env var / secrets manager referenced by this name —
+  // never store raw API keys in the database.
+  secretRef     String
+  config        Json?               // model name, default params, etc.
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  jobs          GenerationJob[]
+}
+
+enum AiCategory {
+  IMAGE
+  VIDEO
+  VOICE
+  MUSIC
+  TEXT
+  MODERATION
+}
+
+enum ProviderHealth {
+  ONLINE
+  DEGRADED
+  OFFLINE
+}
+
+// ---------- GENERATION JOBS ----------
+
+model GenerationJob {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  projectId     String?
+  project       Project? @relation(fields: [projectId], references: [id])
+  toolKey       String              // matches GenerationCost.toolKey
+  category      AiCategory
+  providerId    String?
+  provider      AiProvider? @relation(fields: [providerId], references: [id])
+  status        JobStatus @default(QUEUED)
+  input         Json                // prompt, params — sanitized, no secrets
+  outputUrl     String?             // signed URL / storage key, resolved at read-time
+  errorMessage  String?
+  creditsCost   Int
+  creditsRefunded Boolean @default(false)
+  moderationResult ModerationDecision @default(PENDING)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+
+  creditTxns    CreditTransaction[]
+
+  @@index([userId, status])
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ModerationDecision {
+  PENDING
+  ALLOWED
+  REVIEW
+  BLOCKED
+}
+
+// ---------- PROJECTS & MEDIA ----------
+
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  name        String
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  jobs        GenerationJob[]
+  media       MediaAsset[]
+}
+
+model MediaAsset {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id])
+  type        AiCategory
+  storageKey  String              // object storage key/path — never a public permanent URL
+  sizeBytes   Int?
+  createdAt   DateTime @default(now())
+}
+
+model BrandKit {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+  businessName String?
+  tagline     String?
+  logoStorageKey String?
+  colors      Json?               // array of hex values
+  fonts       Json?
+  socialHandles Json?
+}
+
+// ---------- API KEYS ----------
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  label       String
+  keyHash     String   @unique   // store only a hash; show the raw key once at creation
+  keyPrefix   String              // first few chars, safe to display for identification
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+}
+
+// ---------- ABUSE / MODERATION ----------
+
+model AbuseFlag {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  type        String              // "rate_limit", "referral_abuse", "duplicate_device", ...
+  details     Json?
+  resolvedAt  DateTime?
+  createdAt   DateTime @default(now())
+}
