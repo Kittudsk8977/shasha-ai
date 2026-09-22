@@ -9,11 +9,14 @@ export default function HomePage() {
           Generate on-brand visuals in seconds — built for teams who need
           production-ready assets without a design queue.
         </p>
-        <div className="mt-10">
-          <button className="bg-[#E8A33D] text-[#121019] font-medium px-7 py-3 rounded-md hover:bg-[#f0b563] transition-colors">
-            Get started
-          </button>
-        </div>
+       <div className="mt-10">
+  <a
+    href="/dashboard"
+    className="inline-block bg-[#E8A33D] text-[#121019] font-medium px-7 py-3 rounded-md hover:bg-[#f0b563] transition-colors"
+  >
+    Get started
+  </a>
+</div>
       </div>
     </main>
   );
