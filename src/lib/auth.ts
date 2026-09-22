@@ -83,12 +83,4 @@ export async function createUser(params: { name: string; email: string; password
  * `getServerSession(authOptions)` plus an API-key header check once
  * NextAuth is wired into your route handlers.
  */
-export async function getServerAuthUser(_req: NextRequest) {
-  // TODO: replace with real session/API-key resolution, e.g.:
-  // const session = await getServerSession(authOptions);
-  // if (session?.user) return prisma.user.findUnique({ where: { id: session.user.id } });
-  //
-  // const apiKey = req.headers.get('authorization')?.replace('Bearer ', '');
-  // if (apiKey) return resolveUserFromApiKey(apiKey);
-  return null;
-}
+type AuthUser = { id: string; role: string } | null; export async function getServerAuthUser(_req: NextRequest): Promise<AuthUser> { return null; }
